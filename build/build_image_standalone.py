@@ -38,6 +38,18 @@ import tempfile
 from subprocess import call
 from zipfile import ZipFile
 
+'''
+Script Versioning:
+
+Version 1.0:
+  Supports the following:
+  - Generates the Super image from the given Qssi and target builds.
+  - Outputs OTA zip as well, optionally.
+  - Enforces QIIFA checks, to ensure Qssi and target builds being combined
+    and compatible with each other.
+'''
+__version__ = '1.0'
+
 logger = logging.getLogger(__name__)
 
 BUILD_TOOLS_ZIP  = "buildtools/buildtools.zip"
@@ -50,15 +62,17 @@ QIIFA_DIR_TARGET = "QIIFA_TARGET"
 # QSSI build's OUT_DIST artifacts (pattern supported):
 QSSI_OUT_DIST_ARTIFACTS = (
     'otatools.zip',
-    BUILD_TOOLS_ZIP,
-    'qssi*-target_files-*.zip'
+    BUILD_TOOLS_ZIP
 )
+
+QSSI_TARGET_FILES_ZIP = "qssi*-target_files-*.zip"
 
 # TARGET build's OUT_DIST artifacts (pattern supported):
 TARGET_OUT_DIST_ARTIFACTS = (
     'merge_config_*',
-    '*-target_files-*.zip'
 )
+
+TARGET_TARGET_FILES_ZIP = "-target_files-*.zip"
 
 # MERGED build's OUT_DIST OTA related artifacts that are optionally backed up
 # along with super.img via "--output_ota" arg (pattern supported):
@@ -104,7 +118,7 @@ def copy_items(from_dir, to_dir, files, list_identifier):
         os.makedirs(copied_file_dir)
       shutil.copyfile(original_file_path, copied_file_path)
 
-def copy_pattern_items(from_dir, to_dir, patterns, list_identifier):
+def copy_pattern_items(from_dir, to_dir, patterns, list_identifier, enforce_single_item_only=False):
   file_paths = []
   for dirpath, _, filenames in os.walk(from_dir):
     file_paths.extend(
@@ -113,16 +127,23 @@ def copy_pattern_items(from_dir, to_dir, patterns, list_identifier):
 
   filtered_file_paths = set()
   for pattern in patterns:
-    filtered_file_paths.update(fnmatch.filter(file_paths, pattern))
+    filtered_file_path = fnmatch.filter(file_paths, pattern)
+    if enforce_single_item_only and len(filtered_file_path) > 1:
+      logging.error("FAILED: Multiple conflicting files found at " + from_dir  + " for "+ list_identifier + ": " +str(filtered_file_path))
+      logging.error("Please ensure there is only one valid file and re-run.")
+      sys.exit(1)
+    filtered_file_paths.update(filtered_file_path)
   if len(filtered_file_paths) == 0:
-    logging.error("FAILED: Files: "+ list_identifier + ":" +str(patterns)+ " not found")
+    logging.error("FAILED: File: "+ list_identifier + ":" +str(patterns)+ " not found")
     sys.exit(1)
   copy_items(from_dir, to_dir, filtered_file_paths, list_identifier)
 
 def fetch_build_artifacts(temp_dir, qssi_build_path, target_build_path,
                         target_lunch):
   copy_pattern_items(qssi_build_path + "/" + OUT_DIST, temp_dir + "/" + OUT_DIST, QSSI_OUT_DIST_ARTIFACTS, "QSSI_OUT_DIST_ARTIFACTS")
+  copy_pattern_items(qssi_build_path + "/" + OUT_DIST, temp_dir + "/" + OUT_DIST, (QSSI_TARGET_FILES_ZIP,), "QSSI_TARGET_FILES_ZIP", True)
   copy_pattern_items(target_build_path + "/" + OUT_DIST, temp_dir + "/" + OUT_DIST, TARGET_OUT_DIST_ARTIFACTS, "TARGET_OUT_DIST_ARTIFACTS")
+  copy_pattern_items(target_build_path + "/" + OUT_DIST, temp_dir + "/" + OUT_DIST, (target_lunch + TARGET_TARGET_FILES_ZIP,), "TARGET_TARGET_FILES_ZIP", True)
   with ZipFile(temp_dir + "/" + OUT_DIST + BUILD_TOOLS_ZIP, 'r') as zipObj:
     zipObj.extractall(temp_dir)
 
@@ -252,6 +273,8 @@ def main():
                     help="Outputs OTA related zips additionally", action='store_true')
   parser.add_argument("--skip_qiifa",  dest='skip_qiifa',
                     help="Skips QIIFA checks (but this may just defer the real Qssi and target incompatibility issues until later)", action='store_true')
+  parser.add_argument('--version', action='version', version=__version__)
+
   args = parser.parse_args()
 
   if args.image == "super":
